@@ -32,6 +32,7 @@ def train_fn(
     log_dir="/tmp/ppg",
     comm=None,
     venv: Optional[ProcgenGym3Env] = None,
+    port: int = 29500,
 ):
     """
 
@@ -43,7 +44,7 @@ def train_fn(
     """
     if comm is None:
         comm = MPI.COMM_WORLD
-    tu.setup_dist(comm=comm)
+    tu.setup_dist(comm=comm, start_port=port)
     tu.register_distributions_for_tree_util()
 
     if log_dir is not None:
@@ -53,7 +54,11 @@ def train_fn(
     if venv is None:
         venv = get_venv(num_envs=num_envs, env_name=env_name, distribution_mode=distribution_mode)
 
-    enc_fn = lambda obtype: ImpalaEncoder(obtype.shape, outsize=256, chans=(16, 32, 32),)
+    enc_fn = lambda obtype: ImpalaEncoder(
+        obtype.shape,
+        outsize=256,
+        chans=(16, 32, 32),
+    )
     model = ppg.PhasicValueModel(venv.ob_space, venv.ac_space, enc_fn, arch=arch)
 
     model.to(tu.DEFAULT_DEVICE)
