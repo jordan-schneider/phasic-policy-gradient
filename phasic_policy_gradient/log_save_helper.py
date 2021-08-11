@@ -1,10 +1,12 @@
 import os
 import resource
 import time
+from typing import Literal, Optional
 
 import numpy as np
 import torch as th
 from mpi4py import MPI
+from torch import nn
 
 from . import logger
 
@@ -30,15 +32,27 @@ def rcm(start, stop, modulus, mode="[)"):
 class LogSaveHelper:
     def __init__(
         self,
-        model: "(nn.Module)",
-        ic_per_step: "(int) number of iteractions per logging step",
-        comm: "(MPI.Comm)" = None,
-        ic_per_save: "(int) save only after this many interactions" = 100_000,
-        save_mode: "(str) last: keep last model, all: keep all}" = "none",
-        t0: "(float) override training start timestamp" = None,
-        log_callbacks: "(list) extra callbacks to run before self.log()" = None,
-        log_new_eps: "(bool) whether to log statistics for new episodes from non-rolling buffer" = False,
+        model: nn.Module,
+        ic_per_step: int,
+        comm: Optional[MPI.Comm] = None,
+        ic_per_save: int = 100_000,
+        save_mode: Literal["none", "all", "last"] = "none",
+        t0: float = None,
+        log_callbacks: list = None,
+        log_new_eps: bool = False,
     ):
+        """[summary]
+
+        Args:
+            model (nn.Module): [description]
+            ic_per_step (int): number of iteractions per logging step
+            comm (Mpi.Comm, optional): [description]. Defaults to None.
+            ic_per_save (int, optional): save only after this many interactions. Defaults to 100_000.
+            save_mode (Literal["none", "all", "last"], optional): Defaults to "none".
+            t0 (float, optional): override training start timestamp. Defaults to None.
+            log_callbacks (list, optional): extra callbacks to run before self.log(). Defaults to None.
+            log_new_eps (bool, optional): whether to log statistics for new episodes from non-rolling buffer. Defaults to False.
+        """
         self.model = model
         self.comm = comm or MPI.COMM_WORLD
         self.ic_per_step = ic_per_step

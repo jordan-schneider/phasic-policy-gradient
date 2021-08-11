@@ -80,7 +80,7 @@ def train_fn(
             n_epoch_pi=n_epoch_pi,
             clip_param=clip_param,
             kl_penalty=kl_penalty,
-            log_save_opts={"save_mode": "last"},
+            log_save_opts={"save_mode": "all"},
         ),
         aux_lr=aux_lr,
         aux_mbsize=aux_mbsize,
