@@ -1,11 +1,12 @@
 import os
-import time
 import resource
+import time
 
 import numpy as np
 import torch as th
-from . import logger
 from mpi4py import MPI
+
+from . import logger
 
 
 def rcm(start, stop, modulus, mode="[)"):
@@ -24,6 +25,7 @@ def rcm(start, stop, modulus, mode="[)"):
     return (start < stop) and (
         (left_hit and mode[0] == "[") or (middle_hit) or (right_hit and mode[1] == "]")
     )
+
 
 class LogSaveHelper:
     def __init__(
@@ -102,15 +104,13 @@ class LogSaveHelper:
         logger.logkv("IPS_total", Δic / Δtime)
         logger.logkv("del_time", Δtime)
         logger.logkv("Iter", self.log_idx)
-        logger.logkv(
-            "CpuMaxMemory", resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1000
-        )
+        logger.logkv("CpuMaxMemory", resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1000)
         if th.cuda.is_available():
             logger.logkv("GpuMaxMemory", th.cuda.max_memory_allocated())
             th.cuda.reset_max_memory_allocated()
 
-        if self.comm.rank == 0:
-            print("RCALL_LOGDIR: ", os.environ["RCALL_LOGDIR"])
+        # if self.comm.rank == 0:
+        #     print("RCALL_LOGDIR: ", os.environ["RCALL_LOGDIR"])
         logger.dumpkvs()
         self.last_time = cur_time
         self.last_ic = self.total_interact_count
