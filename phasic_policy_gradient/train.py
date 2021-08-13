@@ -1,6 +1,8 @@
 import argparse
-from typing import Optional
+from pathlib import Path
+from typing import Literal, Optional
 
+import torch
 from mpi4py import MPI
 from procgen.env import ProcgenGym3Env
 
@@ -9,11 +11,26 @@ from . import torch_util as tu
 from .envs import get_venv
 from .impala_cnn import ImpalaEncoder
 
+Architecture = Literal["shared", "detach", "dual"]
+
+
+def make_model(env: ProcgenGym3Env, arch: Architecture) -> ppg.PhasicValueModel:
+    enc_fn = lambda obtype: ImpalaEncoder(
+        obtype.shape,
+        outsize=256,
+        chans=(16, 32, 32),
+    )
+    model = ppg.PhasicValueModel(env.ob_space, env.ac_space, enc_fn, arch=arch)
+    return model
+
 
 def train_fn(
+    venv: Optional[ProcgenGym3Env] = None,
     env_name="coinrun",
     distribution_mode="hard",
-    arch="dual",  # 'shared', 'detach', or 'dual'
+    model_path: Optional[Path] = None,
+    start_time: int = 0,
+    arch: Architecture = "dual",
     interacts_total=100_000_000,
     num_envs=64,
     n_epoch_pi=1,
@@ -31,7 +48,6 @@ def train_fn(
     vf_true_weight=1.0,
     log_dir="/tmp/ppg",
     comm=None,
-    venv: Optional[ProcgenGym3Env] = None,
     port: int = 29500,
 ):
     """
@@ -47,19 +63,21 @@ def train_fn(
     tu.setup_dist(comm=comm, start_port=port)
     tu.register_distributions_for_tree_util()
 
+    is_master = comm.Get_rank() == 0
+
     if log_dir is not None:
-        format_strs = ["csv", "stdout"] if comm.Get_rank() == 0 else []
-        logger.configure(comm=comm, dir=log_dir, format_strs=format_strs)
+        format_strs = ["csv", "stdout"] if is_master else []
+        logger.configure(
+            comm=comm, dir=log_dir, format_strs=format_strs, append=model_path is not None
+        )
 
     if venv is None:
         venv = get_venv(num_envs=num_envs, env_name=env_name, distribution_mode=distribution_mode)
 
-    enc_fn = lambda obtype: ImpalaEncoder(
-        obtype.shape,
-        outsize=256,
-        chans=(16, 32, 32),
-    )
-    model = ppg.PhasicValueModel(venv.ob_space, venv.ac_space, enc_fn, arch=arch)
+    if model_path is not None:
+        model = torch.load(model_path)
+    else:
+        model = make_model(venv, arch)
 
     model.to(tu.DEFAULT_DEVICE)
     logger.log(tu.format_model(model))
@@ -80,7 +98,7 @@ def train_fn(
             n_epoch_pi=n_epoch_pi,
             clip_param=clip_param,
             kl_penalty=kl_penalty,
-            log_save_opts={"save_mode": "all"},
+            log_save_opts={"save_mode": "all", "init_timestep": start_time},
         ),
         aux_lr=aux_lr,
         aux_mbsize=aux_mbsize,

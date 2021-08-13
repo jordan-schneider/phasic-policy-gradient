@@ -1,15 +1,16 @@
-import os
-import sys
-import shutil
-import os.path as osp
-import json
-import time
 import datetime
+import json
+import os
+import os.path as osp
+import shutil
+import sys
 import tempfile
+import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from contextlib import contextmanager
 from functools import partial, wraps
+
 from mpi4py import MPI
 
 
@@ -20,8 +21,7 @@ def mpi_weighted_mean(comm, local_name2valcount):
     Returns: key -> mean
     """
     local_name2valcount = {
-        name: (float(val), count)
-        for (name, (val, count)) in local_name2valcount.items()
+        name: (float(val), count) for (name, (val, count)) in local_name2valcount.items()
     }
     all_name2valcount = comm.gather(local_name2valcount)
     if comm.rank == 0:
@@ -134,8 +134,8 @@ class JSONOutputFormat(KVWriter):
 
 
 class CSVOutputFormat(KVWriter):
-    def __init__(self, filename):
-        self.file = open(filename, "w+t")
+    def __init__(self, filename, append: bool):
+        self.file = open(filename, "a+t" if append else "w+t")
         self.keys = []
         self.sep = ","
 
@@ -184,8 +184,8 @@ class TensorBoardOutputFormat(KVWriter):
         prefix = "events"
         path = osp.join(osp.abspath(dir), prefix)
         import tensorflow as tf
-        from tensorflow.python import pywrap_tensorflow
         from tensorflow.core.util import event_pb2
+        from tensorflow.python import pywrap_tensorflow
         from tensorflow.python.util import compat
 
         self.tf = tf
@@ -200,9 +200,7 @@ class TensorBoardOutputFormat(KVWriter):
 
         summary = self.tf.Summary(value=[summary_val(k, v) for k, v in kvs.items()])
         event = self.event_pb2.Event(wall_time=time.time(), summary=summary)
-        event.step = (
-            self.step
-        )  # is there any reason why you'd want to specify the step?
+        event.step = self.step  # is there any reason why you'd want to specify the step?
         self.writer.WriteEvent(event)
 
         self.writer.Flush()
@@ -214,7 +212,7 @@ class TensorBoardOutputFormat(KVWriter):
             self.writer = None
 
 
-def make_output_format(format, ev_dir, log_suffix=""):
+def make_output_format(format, ev_dir, log_suffix="", append: bool = False):
     os.makedirs(ev_dir, exist_ok=True)
     if format == "stdout":
         return HumanOutputFormat(sys.stdout)
@@ -223,7 +221,7 @@ def make_output_format(format, ev_dir, log_suffix=""):
     elif format == "json":
         return JSONOutputFormat(osp.join(ev_dir, "progress%s.json" % log_suffix))
     elif format == "csv":
-        return CSVOutputFormat(osp.join(ev_dir, "progress%s.csv" % log_suffix))
+        return CSVOutputFormat(osp.join(ev_dir, "progress%s.csv" % log_suffix), append)
     elif format == "tensorboard":
         return TensorBoardOutputFormat(osp.join(ev_dir, "tb%s" % log_suffix))
     else:
@@ -354,7 +352,8 @@ def dump_kwargs(func):
     """
 
     def func_wrapper(*args, **kwargs):
-        import inspect, textwrap
+        import inspect
+        import textwrap
 
         sign = inspect.signature(func)
         for k, p in sign.parameters.items():
@@ -430,10 +429,7 @@ class Logger(object):
         else:
             d = mpi_weighted_mean(
                 self.comm,
-                {
-                    name: (val, self.name2cnt.get(name, 1))
-                    for (name, val) in self.name2val.items()
-                },
+                {name: (val, self.name2cnt.get(name, 1)) for (name, val) in self.name2val.items()},
             )
             if self.comm.rank != 0:
                 d["dummy"] = 1  # so we don't get a warning about empty dict
@@ -472,6 +468,7 @@ def configure(
     dir: "(str|None) Local directory to write to" = None,
     format_strs: "(str|None) list of formats" = None,
     comm: "(MPI communicator | None) average numerical stats over comm" = None,
+    append: bool = False,
 ):
     if dir is None:
         if os.getenv("OPENAI_LOGDIR"):
@@ -495,7 +492,7 @@ def configure(
 
     format_strs = format_strs or default_format_strs(comm.rank)
 
-    output_formats = [make_output_format(f, dir, log_suffix) for f in format_strs]
+    output_formats = [make_output_format(f, dir, log_suffix, append) for f in format_strs]
 
     Logger.CURRENT = Logger(dir=dir, output_formats=output_formats, comm=comm)
     log("logger: logging to %s" % dir)
@@ -576,9 +573,10 @@ def read_tb(path):
     path : a tensorboard file OR a directory, where we will find all TB files
            of the form events.*
     """
-    import pandas
-    import numpy as np
     from glob import glob
+
+    import numpy as np
+    import pandas
     import tensorflow as tf
 
     if osp.isdir(path):

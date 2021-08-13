@@ -38,6 +38,7 @@ class LogSaveHelper:
         ic_per_save: int = 100_000,
         save_mode: Literal["none", "all", "last"] = "none",
         t0: float = None,
+        init_timestep: int = 0,
         log_callbacks: list = None,
         log_new_eps: bool = False,
     ):
@@ -58,11 +59,11 @@ class LogSaveHelper:
         self.ic_per_step = ic_per_step
         self.ic_per_save = ic_per_save
         self.save_mode = save_mode
-        self.save_idx = 0
-        self.last_ic = 0
+        self.save_idx = init_timestep // ic_per_save
+        self.last_ic = init_timestep
         self.log_idx = 0
         self.start_time = self.last_time = time.time()
-        self.total_interact_count = 0
+        self.total_interact_count = init_timestep
         if ic_per_save > 0:
             self.save()
         self.start_time = self.last_time = t0 or time.time()
