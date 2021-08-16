@@ -75,11 +75,11 @@ def train_fn(
         venv = get_venv(num_envs=num_envs, env_name=env_name, distribution_mode=distribution_mode)
 
     if model_path is not None:
-        model = torch.load(model_path)
+        model = torch.load(model_path, tu.DEFAULT_DEVICE)
     else:
         model = make_model(venv, arch)
+        model.to(tu.DEFAULT_DEVICE)
 
-    model.to(tu.DEFAULT_DEVICE)
     logger.log(tu.format_model(model))
     tu.sync_params(model.parameters())
 
