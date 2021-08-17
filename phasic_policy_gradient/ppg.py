@@ -1,14 +1,17 @@
-from copy import deepcopy
-from . import ppo
-from . import logger
-import torch as th
 import itertools
-from . import torch_util as tu
-from torch import distributions as td
-from .distr_builder import distr_builder
-from mpi4py import MPI
-from .tree_util import tree_map, tree_reduce
 import operator
+from copy import deepcopy
+
+import torch
+import torch as th
+from mpi4py import MPI
+from torch import distributions as td
+
+from . import logger, ppo
+from . import torch_util as tu
+from .distr_builder import distr_builder
+from .tree_util import tree_map, tree_reduce
+
 
 def sum_nonbatch(logprob_tree):
     """
@@ -46,6 +49,7 @@ class PpoModel(th.nn.Module):
         )
         return vpred[:, 0]
 
+
 class PhasicModel(PpoModel):
     def forward(self, ob, first, state_in) -> "pd, vpred, aux, state_out":
         raise NotImplementedError
@@ -78,21 +82,19 @@ class PhasicValueModel(PhasicModel):
         pi_key = "pi"
 
         if arch == "shared":
-            true_vf_key = "pi"
+            self.true_vf_key = "pi"
         elif arch == "detach":
-            true_vf_key = "pi"
+            self.true_vf_key = "pi"
             detach_value_head = True
         elif arch == "dual":
-            true_vf_key = "vf"
+            self.true_vf_key = "vf"
         else:
             assert False
 
-        vf_keys = vf_keys or [true_vf_key]
+        self.vf_keys = vf_keys or [self.true_vf_key]
         self.pi_enc = enc_fn(obtype)
         self.pi_key = pi_key
-        self.true_vf_key = true_vf_key
-        self.vf_keys = vf_keys
-        self.enc_keys = list(set([pi_key] + vf_keys))
+        self.enc_keys = list(set([pi_key] + self.vf_keys))
         self.detach_value_head = detach_value_head
         pi_outsize, self.make_distr = distr_builder(actype)
 
@@ -120,16 +122,16 @@ class PhasicValueModel(PhasicModel):
 
         return x
 
-    def get_encoder(self, key):
+    def get_encoder(self, key: str) -> torch.nn.Module:
         return getattr(self, key + "_enc")
 
-    def set_encoder(self, key, enc):
+    def set_encoder(self, key: str, enc: torch.nn.Module) -> None:
         setattr(self, key + "_enc", enc)
 
-    def get_vhead(self, key):
+    def get_vhead(self, key: str) -> torch.nn.Module:
         return getattr(self, key + "_vhead")
 
-    def set_vhead(self, key, layer):
+    def set_vhead(self, key: str, layer: torch.nn.Module) -> None:
         setattr(self, key + "_vhead", layer)
 
     def forward(self, ob, first, state_in):
@@ -154,11 +156,16 @@ class PhasicValueModel(PhasicModel):
 
         return pd, vfvec, aux, state_out
 
+    @torch.no_grad()
+    def value(self, obs):
+        return self.get_vhead(self.true_vf_key)(self.get_encoder(self.true_vf_key)(obs))
+
     def initial_state(self, batchsize):
         return {k: self.get_encoder(k).initial_state(batchsize) for k in self.enc_keys}
 
     def aux_keys(self):
         return ["vtarg"]
+
 
 def make_minibatches(segs, mbsize):
     """
@@ -170,9 +177,7 @@ def make_minibatches(segs, mbsize):
     envs_segs = th.tensor(list(itertools.product(range(nenv), range(nseg))))
     for perminds in th.randperm(len(envs_segs)).split(mbsize):
         esinds = envs_segs[perminds]
-        yield tu.tree_stack(
-            [tu.tree_slice(segs[segind], envind) for (envind, segind) in esinds]
-        )
+        yield tu.tree_stack([tu.tree_slice(segs[segind], envind) for (envind, segind) in esinds])
 
 
 def aux_train(*, model, segs, opt, mbsize, name2coef):
@@ -201,9 +206,7 @@ def aux_train(*, model, segs, opt, mbsize, name2coef):
         opt.step()
 
 
-def compute_presleep_outputs(
-    *, model, segs, mbsize, pdkey="oldpd", vpredkey="oldvpred"
-):
+def compute_presleep_outputs(*, model, segs, mbsize, pdkey="oldpd", vpredkey="oldvpred"):
     def forward(ob, first, state_in):
         pd, vpred, _aux, _state_out = model.forward(ob.to(tu.dev()), first, state_in)
         return pd, vpred
