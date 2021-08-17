@@ -1,12 +1,17 @@
+from __future__ import annotations
+
 import math
 
 import torch as th
+from gym3.types import Real, TensorType
 from torch import nn
 from torch.nn import functional as F
 
 from . import torch_util as tu
-from gym3.types import Real, TensorType
+
 REAL = Real()
+
+
 
 class Encoder(nn.Module):
     """
@@ -184,3 +189,12 @@ class ImpalaEncoder(Encoder):
 
     def initial_state(self, batchsize):
         return tu.zeros(batchsize, 0)
+
+    @staticmethod
+    def from_enc(other: ImpalaEncoder) -> ImpalaEncoder:
+        # TODO: Figure out how to do this copy
+        out = ImpalaEncoder(
+            inshape = other.obtype.shape,
+            outsize=other.codetype.shape,
+            chans=
+        )
