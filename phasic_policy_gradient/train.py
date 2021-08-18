@@ -1,9 +1,9 @@
 import argparse
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 
 import torch
-from mpi4py import MPI
+from mpi4py import MPI  # type: ignore
 from procgen.env import ProcgenGym3Env
 
 from . import logger, ppg
@@ -11,10 +11,8 @@ from . import torch_util as tu
 from .envs import get_venv
 from .impala_cnn import ImpalaEncoder
 
-Architecture = Literal["shared", "detach", "dual"]
 
-
-def make_model(env: ProcgenGym3Env, arch: Architecture) -> ppg.PhasicValueModel:
+def make_model(env: ProcgenGym3Env, arch: ppg.Architecture) -> ppg.PhasicValueModel:
     enc_fn = lambda obtype: ImpalaEncoder(
         obtype.shape,
         outsize=256,
@@ -30,7 +28,7 @@ def train_fn(
     distribution_mode="hard",
     model_path: Optional[Path] = None,
     start_time: int = 0,
-    arch: Architecture = "dual",
+    arch: ppg.Architecture = "dual",
     interacts_total=100_000_000,
     num_envs=64,
     n_epoch_pi=1,

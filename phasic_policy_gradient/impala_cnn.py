@@ -12,7 +12,6 @@ from . import torch_util as tu
 REAL = Real()
 
 
-
 class Encoder(nn.Module):
     """
     Takes in seq of observations and outputs sequence of codes
@@ -54,6 +53,7 @@ class Encoder(nn.Module):
             state_out: array or dict
         """
         raise NotImplementedError
+
 
 class CnnBasicBlock(nn.Module):
     """
@@ -126,9 +126,7 @@ class CnnDownStack(nn.Module):
 class ImpalaCNN(nn.Module):
     name = "ImpalaCNN"  # put it here to preserve pickle compat
 
-    def __init__(
-        self, inshape, chans, outsize, scale_ob, nblock, final_relu=True, **kwargs
-    ):
+    def __init__(self, inshape, chans, outsize, scale_ob, nblock, final_relu=True, **kwargs):
         super().__init__()
         self.scale_ob = scale_ob
         h, w, c = inshape
@@ -136,9 +134,7 @@ class ImpalaCNN(nn.Module):
         s = 1 / math.sqrt(len(chans))  # per stack scale
         self.stacks = nn.ModuleList()
         for outchan in chans:
-            stack = CnnDownStack(
-                curshape[0], nblock=nblock, outchan=outchan, scale=s, **kwargs
-            )
+            stack = CnnDownStack(curshape[0], nblock=nblock, outchan=outchan, scale=s, **kwargs)
             self.stacks.append(stack)
             curshape = stack.output_shape(curshape)
         self.dense = tu.NormedLinear(tu.intprod(curshape), outsize, scale=1.4)
@@ -163,13 +159,7 @@ class ImpalaCNN(nn.Module):
 
 class ImpalaEncoder(Encoder):
     def __init__(
-        self,
-        inshape,
-        outsize=256,
-        chans=(16, 32, 32),
-        scale_ob=255.0,
-        nblock=2,
-        **kwargs
+        self, inshape, outsize=256, chans=(16, 32, 32), scale_ob=255.0, nblock=2, **kwargs
     ):
         codetype = TensorType(eltype=REAL, shape=(outsize,))
         obtype = TensorType(eltype=REAL, shape=inshape)
@@ -189,12 +179,3 @@ class ImpalaEncoder(Encoder):
 
     def initial_state(self, batchsize):
         return tu.zeros(batchsize, 0)
-
-    @staticmethod
-    def from_enc(other: ImpalaEncoder) -> ImpalaEncoder:
-        # TODO: Figure out how to do this copy
-        out = ImpalaEncoder(
-            inshape = other.obtype.shape,
-            outsize=other.codetype.shape,
-            chans=
-        )

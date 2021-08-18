@@ -1,11 +1,14 @@
 import itertools
 import operator
-from copy import deepcopy
+from typing import Callable, Dict, List, Literal, Tuple
 
 import torch
 import torch as th
-from mpi4py import MPI
+from gym3.types import ValType  # type: ignore
+from mpi4py import MPI  # type: ignore
 from torch import distributions as td
+
+from phasic_policy_gradient.impala_cnn import Encoder, ImpalaEncoder
 
 from . import logger, ppo
 from . import torch_util as tu
@@ -22,7 +25,9 @@ def sum_nonbatch(logprob_tree):
 
 
 class PpoModel(th.nn.Module):
-    def forward(self, ob, first, state_in) -> "pd, vpred, aux, state_out":
+    def forward(
+        self, ob, first, state_in
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         raise NotImplementedError
 
     @tu.no_grad
@@ -51,7 +56,9 @@ class PpoModel(th.nn.Module):
 
 
 class PhasicModel(PpoModel):
-    def forward(self, ob, first, state_in) -> "pd, vpred, aux, state_out":
+    def forward(
+        self, ob, first, state_in
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         raise NotImplementedError
 
     def compute_aux_loss(self, aux, mb):
@@ -60,20 +67,24 @@ class PhasicModel(PpoModel):
     def initial_state(self, batchsize):
         raise NotImplementedError
 
-    def aux_keys(self) -> "list of keys needed in mb dict for compute_aux_loss":
+    def aux_keys(self) -> List[str]:
+        """Returns list of keys needed in mb dict for compute_aux_loss"""
         raise NotImplementedError
 
     def set_aux_phase(self, is_aux_phase: bool):
         "sometimes you want to modify the model, e.g. add a stop gradient"
 
 
+Architecture = Literal["shared", "detach", "dual"]
+
+
 class PhasicValueModel(PhasicModel):
     def __init__(
         self,
-        obtype,
-        actype,
-        enc_fn,
-        arch="dual",  # shared, detach, dual
+        obtype: ValType,
+        actype: ValType,
+        enc_fn: Callable[[ValType], ImpalaEncoder],
+        arch: Architecture = "dual",
     ):
         super().__init__()
 
@@ -122,16 +133,16 @@ class PhasicValueModel(PhasicModel):
 
         return x
 
-    def get_encoder(self, key: str) -> torch.nn.Module:
+    def get_encoder(self, key: str) -> ImpalaEncoder:
         return getattr(self, key + "_enc")
 
-    def set_encoder(self, key: str, enc: torch.nn.Module) -> None:
+    def set_encoder(self, key: str, enc: ImpalaEncoder) -> None:
         setattr(self, key + "_enc", enc)
 
-    def get_vhead(self, key: str) -> torch.nn.Module:
+    def get_vhead(self, key: str) -> torch.nn.Linear:
         return getattr(self, key + "_vhead")
 
-    def set_vhead(self, key: str, layer: torch.nn.Module) -> None:
+    def set_vhead(self, key: str, layer: torch.nn.Linear) -> None:
         setattr(self, key + "_vhead", layer)
 
     def forward(self, ob, first, state_in):
@@ -160,10 +171,10 @@ class PhasicValueModel(PhasicModel):
     def value(self, obs):
         return self.get_vhead(self.true_vf_key)(self.get_encoder(self.true_vf_key)(obs))
 
-    def initial_state(self, batchsize):
+    def initial_state(self, batchsize: int) -> Dict[str, torch.Tensor]:
         return {k: self.get_encoder(k).initial_state(batchsize) for k in self.enc_keys}
 
-    def aux_keys(self):
+    def aux_keys(self) -> List[str]:
         return ["vtarg"]
 
 
@@ -180,7 +191,7 @@ def make_minibatches(segs, mbsize):
         yield tu.tree_stack([tu.tree_slice(segs[segind], envind) for (envind, segind) in esinds])
 
 
-def aux_train(*, model, segs, opt, mbsize, name2coef):
+def aux_train(*, model, segs, opt: torch.optim.Optimizer, mbsize, name2coef):
     """
     Train on auxiliary loss + policy KL + vf distance
     """
@@ -193,7 +204,7 @@ def aux_train(*, model, segs, opt, mbsize, name2coef):
         name2loss["pol_distance"] = td.kl_divergence(mb["oldpd"], pd).mean()
         name2loss.update(model.compute_aux_loss(aux, mb))
         assert set(name2coef.keys()).issubset(name2loss.keys())
-        loss = 0
+        loss = torch.zeros(())
         for name in name2loss.keys():
             unscaled_loss = name2loss[name]
             scaled_loss = unscaled_loss * name2coef.get(name, 1)
