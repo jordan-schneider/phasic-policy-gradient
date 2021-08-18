@@ -168,8 +168,10 @@ class PhasicValueModel(PhasicModel):
         return pd, vfvec, aux, state_out
 
     @torch.no_grad()
-    def value(self, obs):
-        return self.get_vhead(self.true_vf_key)(self.get_encoder(self.true_vf_key)(obs))
+    def value(self, obs: torch.Tensor):
+        return self.get_vhead(self.true_vf_key)(
+            self.get_encoder(self.true_vf_key).stateless_forward(obs)
+        )
 
     def initial_state(self, batchsize: int) -> Dict[str, torch.Tensor]:
         return {k: self.get_encoder(k).initial_state(batchsize) for k in self.enc_keys}
