@@ -23,6 +23,7 @@ def make_model(env: ProcgenGym3Env, arch: ppg.Architecture) -> ppg.PhasicValueMo
 
 
 def train_fn(
+    save_dir: Path,
     venv: Optional[ProcgenGym3Env] = None,
     env_name="coinrun",
     distribution_mode="hard",
@@ -96,7 +97,11 @@ def train_fn(
             n_epoch_pi=n_epoch_pi,
             clip_param=clip_param,
             kl_penalty=kl_penalty,
-            log_save_opts={"save_mode": "all", "init_timestep": start_time},
+            log_save_opts={
+                "save_mode": "all",
+                "init_timestep": start_time,
+                "save_dir": save_dir,
+            },
         ),
         aux_lr=aux_lr,
         aux_mbsize=aux_mbsize,

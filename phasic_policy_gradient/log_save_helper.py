@@ -41,6 +41,7 @@ class LogSaveHelper:
         init_timestep: int = 0,
         log_callbacks: list = None,
         log_new_eps: bool = False,
+        save_dir: Optional[str] = None,
     ):
         """[summary]
 
@@ -70,6 +71,7 @@ class LogSaveHelper:
         self.log_callbacks = log_callbacks
         self.log_new_eps = log_new_eps
         self.roller_stats = {}
+        self.save_dir = save_dir or logger.get_dir()
 
     def __call__(self):
         self.total_interact_count += self.ic_per_step
@@ -142,7 +144,7 @@ class LogSaveHelper:
             raise NotImplementedError
         suffix = f"_rank{MPI.COMM_WORLD.rank:03d}" if MPI.COMM_WORLD.rank != 0 else ""
         basename += f"{suffix}.jd"
-        fname = os.path.join(logger.get_dir(), basename)
+        fname = os.path.join(self.save_dir, basename)
         logger.log("Saving to ", fname, f"IC={self.total_interact_count}")
         th.save(self.model, fname, pickle_protocol=-1)
         self.save_idx += 1
