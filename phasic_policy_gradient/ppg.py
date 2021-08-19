@@ -120,6 +120,8 @@ class PhasicValueModel(PhasicModel):
         self.pi_head = tu.NormedLinear(lastsize, pi_outsize, scale=0.1)
         self.aux_vf_head = tu.NormedLinear(lastsize, 1, scale=0.1)
 
+        self.device = self.pi_head.weight.device
+
     def compute_aux_loss(self, aux, seg):
         vtarg = seg["vtarg"]
         return {
