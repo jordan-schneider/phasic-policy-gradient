@@ -65,13 +65,13 @@ class LogSaveHelper:
         self.log_idx = 0
         self.start_time = self.last_time = time.time()
         self.total_interact_count = init_timestep
+        self.save_dir = save_dir or logger.get_dir()
         if ic_per_save > 0:
             self.save()
         self.start_time = self.last_time = t0 or time.time()
         self.log_callbacks = log_callbacks
         self.log_new_eps = log_new_eps
         self.roller_stats = {}
-        self.save_dir = save_dir or logger.get_dir()
 
     def __call__(self):
         self.total_interact_count += self.ic_per_step
