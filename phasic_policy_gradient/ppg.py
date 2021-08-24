@@ -208,7 +208,7 @@ def aux_train(*, model, segs, opt: torch.optim.Optimizer, mbsize, name2coef):
         name2loss["pol_distance"] = td.kl_divergence(mb["oldpd"], pd).mean()
         name2loss.update(model.compute_aux_loss(aux, mb))
         assert set(name2coef.keys()).issubset(name2loss.keys())
-        loss = torch.zeros((), device=model.device)
+        loss = torch.zeros((), device=tu.dev())
         for name in name2loss.keys():
             unscaled_loss = name2loss[name]
             scaled_loss = unscaled_loss * name2coef.get(name, 1)
