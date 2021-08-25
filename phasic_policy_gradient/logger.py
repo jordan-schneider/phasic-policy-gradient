@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import datetime
+import importlib
 import json
 import os
 import os.path as osp
@@ -10,28 +13,31 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from contextlib import contextmanager
 from functools import partial, wraps
+from pathlib import Path
+from typing import Any, DefaultDict, Dict, List, Mapping, Optional, SupportsFloat, Tuple
 
-from mpi4py import MPI
+from mpi4py import MPI  # type: ignore
+from mpi4py.MPI import Comm  # type: ignore
 
 
-def mpi_weighted_mean(comm, local_name2valcount):
+def mpi_weighted_mean(
+    comm: Comm, val_count: Mapping[str, Tuple[SupportsFloat, int]]
+) -> Dict[str, float]:
     """
     Perform a weighted average over dicts that are each on a different node
-    Input: local_name2valcount: dict mapping key -> (value, count)
+    Input: local_name2valcount: dict mapping key -> (value, weight)
     Returns: key -> mean
     """
-    local_name2valcount = {
-        name: (float(val), count) for (name, (val, count)) in local_name2valcount.items()
-    }
-    all_name2valcount = comm.gather(local_name2valcount)
+    val_count = {name: (float(val), count) for (name, (val, count)) in val_count.items()}
+    global_val_counts: List[Dict[str, Tuple[float, int]]] = comm.gather(val_count)
     if comm.rank == 0:
-        name2sum = defaultdict(float)
-        name2count = defaultdict(float)
-        for n2vc in all_name2valcount:
-            for (name, (val, count)) in n2vc.items():
-                name2sum[name] += val * count
-                name2count[name] += count
-        return {name: name2sum[name] / name2count[name] for name in name2sum}
+        weighted_sums: DefaultDict[str, float] = defaultdict(float)
+        total_weights: DefaultDict[str, float] = defaultdict(float)
+        for val_counts in global_val_counts:
+            for (name, (val, count)) in val_counts.items():
+                weighted_sums[name] += val * count
+                total_weights[name] += count
+        return {name: weighted_sums[name] / total_weights[name] for name in weighted_sums}
     else:
         return {}
 
@@ -134,39 +140,54 @@ class JSONOutputFormat(KVWriter):
 
 
 class CSVOutputFormat(KVWriter):
-    def __init__(self, filename, append: bool):
+    def __init__(self, filename: str, append: bool):
         self.file = open(filename, "a+t" if append else "w+t")
-        self.keys = []
+        self.keys: List[str] = []
         self.sep = ","
 
-    def writekvs(self, kvs):
+    def writekvs(self, kvs: Dict[str, Any]):
         # Add our current row to the history
         extra_keys = list(kvs.keys() - self.keys)
         extra_keys.sort()
         if extra_keys:
             self.keys.extend(extra_keys)
+            lines = self.__read_lines(skip_seek=True)
+
+            self.__write_header()
+
+            # Rewrite existing lines with new separators for new keys
             self.file.seek(0)
-            lines = self.file.readlines()
-            self.file.seek(0)
-            for (i, k) in enumerate(self.keys):
-                if i > 0:
-                    self.file.write(",")
-                self.file.write(k)
-            self.file.write("\n")
             for line in lines[1:]:
                 self.file.write(line[:-1])
                 self.file.write(self.sep * len(extra_keys))
                 self.file.write("\n")
-        for (i, k) in enumerate(self.keys):
+
+        # Write new row
+        for i, k in enumerate(self.keys):
             if i > 0:
                 self.file.write(",")
             v = kvs.get(k)
-            if hasattr(v, "__float__"):
+            if isinstance(v, SupportsFloat):
                 v = float(v)
             if v is not None:
                 self.file.write(str(v))
         self.file.write("\n")
         self.file.flush()
+
+    def __write_header(self):
+        for (i, k) in enumerate(self.keys):
+            if i > 0:
+                self.file.write(",")
+            self.file.write(k)
+        self.file.write("\n")
+
+    def __read_lines(self, skip_seek: bool = False) -> List[str]:
+        offset = self.file.tell()
+        self.file.seek(0)
+        lines = self.file.readlines()
+        if not skip_seek:
+            self.file.seek(offset)
+        return lines
 
     def close(self):
         self.file.close()
@@ -177,53 +198,87 @@ class TensorBoardOutputFormat(KVWriter):
     Dumps key/value pairs into TensorBoard's numeric format.
     """
 
-    def __init__(self, dir):
-        os.makedirs(dir, exist_ok=True)
-        self.dir = dir
-        self.step = 1
-        prefix = "events"
-        path = osp.join(osp.abspath(dir), prefix)
-        import tensorflow as tf
-        from tensorflow.core.util import event_pb2
-        from tensorflow.python import pywrap_tensorflow
-        from tensorflow.python.util import compat
+    class TfTensorboardOutputFormatter(KVWriter):
+        def __init__(self, outdir: Path):
+            outdir.mkdir(exist_ok=True)
+            self.dir = outdir
+            self.step = 1
 
-        self.tf = tf
-        self.event_pb2 = event_pb2
-        self.pywrap_tensorflow = pywrap_tensorflow
-        self.writer = pywrap_tensorflow.EventsWriter(compat.as_bytes(path))
+            import tensorflow as tf
+            from tensorflow.core.util import event_pb2
+            from tensorflow.python import pywrap_tensorflow
+            from tensorflow.python.util import compat
 
-    def writekvs(self, kvs):
-        def summary_val(k, v):
-            kwargs = {"tag": k, "simple_value": float(v)}
-            return self.tf.Summary.Value(**kwargs)
+            self.tf = tf
+            self.event_pb2 = event_pb2
+            self.pywrap_tensorflow = pywrap_tensorflow
+            self.writer = pywrap_tensorflow.EventsWriter(compat.as_bytes(outdir / "events"))
 
-        summary = self.tf.Summary(value=[summary_val(k, v) for k, v in kvs.items()])
-        event = self.event_pb2.Event(wall_time=time.time(), summary=summary)
-        event.step = self.step  # is there any reason why you'd want to specify the step?
-        self.writer.WriteEvent(event)
+        def writekvs(self, kvs: Dict[str, Any]) -> None:
+            def summary_val(k: str, v: Any):
+                kwargs = {"tag": k, "simple_value": float(v)}
+                return self.tf.Summary.Value(**kwargs)
 
-        self.writer.Flush()
-        self.step += 1
+            summary = self.tf.Summary(value=[summary_val(k, v) for k, v in kvs.items()])
+            event = self.event_pb2.Event(wall_time=time.time(), summary=summary)
+            event.step = self.step  # is there any reason why you'd want to specify the step?
+            self.writer.WriteEvent(event)
+
+            self.writer.Flush()
+            self.step += 1
+
+        def close(self) -> None:
+            if self.writer:
+                self.writer.Close()
+                self.writer = None
+
+    class TorchTensorboardOutputFormatter(KVWriter):
+        def __init__(self, outdir: Path) -> None:
+            outdir.mkdir(parents=True, exist_ok=True)
+            from torch.utils.tensorboard import SummaryWriter
+
+            self.writer = SummaryWriter(log_dir=outdir)
+            self.step = 0
+
+        def writekvs(self, kvs: Dict[str, Any]) -> None:
+            now = time.time()
+            for key, value in kvs.items():
+                self.writer.add_scalar(
+                    tag=key, scalar_value=value, global_step=self.step, walltime=now
+                )
+            self.step += 1
+
+        def close(self) -> None:
+            self.writer.close()
+
+    formatter: KVWriter
+
+    def __init__(self, outdir: Path):
+        if importlib.util.find_spec("tensorflow") is not None:
+            self.formatter = TensorBoardOutputFormat.TfTensorboardOutputFormatter(outdir=outdir)
+        elif importlib.util.find_spec("pytorch") is not None:
+            self.formatter = TensorBoardOutputFormat.TorchTensorboardOutputFormatter(outdir=outdir)
+
+    def writekvs(self, kvs) -> None:
+        self.formatter.writekvs(kvs)
 
     def close(self):
-        if self.writer:
-            self.writer.Close()
-            self.writer = None
+        return self.formatter.close()
 
 
-def make_output_format(format, ev_dir, log_suffix="", append: bool = False):
-    os.makedirs(ev_dir, exist_ok=True)
+def make_output_format(format, ev_dir: Path, log_suffix="", append: bool = False):
+    ev_dir = Path(ev_dir)
+    ev_dir.mkdir(exist_ok=True)
     if format == "stdout":
         return HumanOutputFormat(sys.stdout)
     elif format == "log":
-        return HumanOutputFormat(osp.join(ev_dir, "log%s.txt" % log_suffix))
+        return HumanOutputFormat(ev_dir / "log%s.txt" % log_suffix)
     elif format == "json":
-        return JSONOutputFormat(osp.join(ev_dir, "progress%s.json" % log_suffix))
+        return JSONOutputFormat(ev_dir / "progress%s.json" % log_suffix)
     elif format == "csv":
-        return CSVOutputFormat(osp.join(ev_dir, "progress%s.csv" % log_suffix), append)
+        return CSVOutputFormat(ev_dir / "progress%s.csv" % log_suffix, append)
     elif format == "tensorboard":
-        return TensorBoardOutputFormat(osp.join(ev_dir, "tb%s" % log_suffix))
+        return TensorBoardOutputFormat(ev_dir / "tb%s" % log_suffix)
     else:
         raise ValueError("Unknown format specified: %s" % (format,))
 
@@ -399,23 +454,23 @@ def get_current():
 
 
 class Logger(object):
-    CURRENT = None  # Current logger being used by the free functions above
+    CURRENT: Optional[Logger] = None  # Current logger being used by the free functions above
 
-    def __init__(self, dir, output_formats, comm=None):
-        self.name2val = defaultdict(float)  # values this iteration
-        self.name2cnt = defaultdict(int)
-        self.dir = dir
+    def __init__(self, outdir: Path, output_formats: List[KVWriter], comm: Optional[Comm] = None):
+        self.name2val: DefaultDict[str, float] = defaultdict(float)  # values this iteration
+        self.name2cnt: DefaultDict[str, int] = defaultdict(int)
+        self.outdir = outdir
         self.output_formats = output_formats
         self.comm = comm
 
     # Logging API, forwarded
     # ----------------------------------------
-    def logkv(self, key, val):
+    def logkv(self, key: str, val):
         if hasattr(val, "requires_grad"):  # see "pytorch explainer" above
             val = val.detach()
         self.name2val[key] = val
 
-    def logkv_mean(self, key, val):
+    def logkv_mean(self, key: str, val):
         assert hasattr(val, "__float__")
         if hasattr(val, "requires_grad"):  # see "pytorch explainer" above
             val = val.detach()
@@ -424,18 +479,19 @@ class Logger(object):
         self.name2cnt[key] = cnt + 1
 
     def dumpkvs(self):
+        d: Mapping[str, float]
         if self.comm is None:
             d = self.name2val
         else:
-            d = mpi_weighted_mean(
-                self.comm,
-                {name: (val, self.name2cnt.get(name, 1)) for (name, val) in self.name2val.items()},
-            )
+            kv_counts = {
+                name: (val, self.name2cnt.get(name, 1)) for (name, val) in self.name2val.items()
+            }
+            d = mpi_weighted_mean(comm=self.comm, val_count=kv_counts)
             if self.comm.rank != 0:
                 d["dummy"] = 1  # so we don't get a warning about empty dict
         out = d.copy()  # Return the dict for unit testing purposes
         for fmt in self.output_formats:
-            if self.comm.rank == 0:
+            if self.comm is not None and self.comm.rank == 0:
                 fmt.writekvs(d)
         self.name2val.clear()
         self.name2cnt.clear()
@@ -450,7 +506,7 @@ class Logger(object):
     # Configuration
     # ----------------------------------------
     def get_dir(self):
-        return self.dir
+        return self.outdir
 
     def close(self):
         for fmt in self.output_formats:
@@ -465,20 +521,28 @@ class Logger(object):
 
 
 def configure(
-    dir: "(str|None) Local directory to write to" = None,
-    format_strs: "(str|None) list of formats" = None,
-    comm: "(MPI communicator | None) average numerical stats over comm" = None,
+    outdir: Optional[str] = None,
+    format_strs: Optional[List[str]] = None,
+    comm: Comm = None,
     append: bool = False,
 ):
-    if dir is None:
+    """[summary]
+
+    Args:
+        dir ([type], optional): Local directory to write to. Defaults to None.
+        format_strs ([type], optional): list of formats. Defaults to None.
+        comm ([type], optional): average numerical stats over comm. Defaults to None.
+        append (bool, optional): [description]. Defaults to False.
+    """
+    if outdir is None:
         if os.getenv("OPENAI_LOGDIR"):
-            dir = os.environ["OPENAI_LOGDIR"]
+            outdir = os.environ["OPENAI_LOGDIR"]
         else:
-            dir = osp.join(
+            outdir = osp.join(
                 tempfile.gettempdir(),
                 datetime.datetime.now().strftime("openai-%Y-%m-%d-%H-%M-%S-%f"),
             )
-    os.makedirs(dir, exist_ok=True)
+    os.makedirs(outdir, exist_ok=True)
 
     # choose log suffix based on world rank because otherwise the files will collide
     # if we split the world comm into different comms
@@ -492,10 +556,10 @@ def configure(
 
     format_strs = format_strs or default_format_strs(comm.rank)
 
-    output_formats = [make_output_format(f, dir, log_suffix, append) for f in format_strs]
+    output_formats = [make_output_format(f, Path(outdir), log_suffix, append) for f in format_strs]
 
-    Logger.CURRENT = Logger(dir=dir, output_formats=output_formats, comm=comm)
-    log("logger: logging to %s" % dir)
+    Logger.CURRENT = Logger(outdir=outdir, output_formats=output_formats, comm=comm)
+    log("logger: logging to %s" % outdir)
 
 
 def is_configured():
@@ -512,10 +576,11 @@ def default_format_strs(rank):
 @contextmanager
 def scoped_configure(dir=None, format_strs=None, comm=None):
     prevlogger = Logger.CURRENT
-    configure(dir=dir, format_strs=format_strs, comm=comm)
+    configure(outdir=dir, format_strs=format_strs, comm=comm)
     try:
         yield
     finally:
+        assert Logger.CURRENT is not None
         Logger.CURRENT.close()
         Logger.CURRENT = prevlogger
 
@@ -529,7 +594,7 @@ def _demo():
     dir = "/tmp/testlogging"
     if os.path.exists(dir):
         shutil.rmtree(dir)
-    configure(dir=dir)
+    configure(outdir=dir)
     logkv("a", 3)
     logkv("b", 2.5)
     dumpkvs()
@@ -553,7 +618,7 @@ def _demo():
 
 
 def read_json(fname):
-    import pandas
+    import pandas  # type: ignore
 
     ds = []
     with open(fname, "rt") as fh:

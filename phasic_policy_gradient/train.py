@@ -65,9 +65,9 @@ def train_fn(
     is_master = comm.Get_rank() == 0
 
     if log_dir is not None:
-        format_strs = ["csv", "stdout"] if is_master else []
+        format_strs = ["csv", "stdout", "tensorboard"] if is_master else []
         logger.configure(
-            comm=comm, dir=log_dir, format_strs=format_strs, append=model_path is not None
+            comm=comm, outdir=log_dir, format_strs=format_strs, append=model_path is not None
         )
 
     if venv is None:
@@ -129,6 +129,7 @@ def main():
     comm = MPI.COMM_WORLD
 
     train_fn(
+        save_dir=Path.cwd(),
         env_name=args.env_name,
         num_envs=args.num_envs,
         n_epoch_pi=args.n_epoch_pi,
