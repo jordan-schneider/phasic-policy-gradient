@@ -65,7 +65,7 @@ def train_fn(
     is_master = comm.Get_rank() == 0
 
     if log_dir is not None:
-        format_strs = ["csv", "stdout", "tensorboard"] if is_master else []
+        format_strs = ["csv", "stdout", "log", "tensorboard"] if is_master else []
         logger.configure(
             comm=comm, outdir=log_dir, format_strs=format_strs, append=model_path is not None
         )
