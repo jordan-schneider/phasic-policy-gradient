@@ -1,7 +1,9 @@
 import itertools
 import operator
-from typing import Callable, Dict, List, Literal, Tuple
+from time import perf_counter
+from typing import Callable, Dict, List, Literal, Tuple, cast
 
+import arrow
 import torch
 import torch as th
 from gym3.types import ValType  # type: ignore
@@ -201,12 +203,28 @@ def aux_train(*, model, segs, opt: torch.optim.Optimizer, mbsize, name2coef):
     """
     needed_keys = {"ob", "first", "state_in", "oldpd"}.union(model.aux_keys())
     segs = [{k: seg[k] for k in needed_keys} for seg in segs]
+
+    total_move_time = 0.0
+    total_pred_time = 0.0
+    total_loss_time = 0.0
+    total_grad_time = 0.0
+    batches = 0
     for mb in make_minibatches(segs, mbsize):
+        start = perf_counter()
         mb = tree_map(lambda x: x.to(tu.dev()), mb)
+        end = perf_counter()
+        total_move_time += end - start
+
+        start = perf_counter()
         pd, _, aux, _state_out = model(mb["ob"], mb["first"], mb["state_in"])
+        end = perf_counter()
+        total_pred_time += end - start
+
+        start = perf_counter()
         name2loss = {}
         name2loss["pol_distance"] = td.kl_divergence(mb["oldpd"], pd).mean()
         name2loss.update(model.compute_aux_loss(aux, mb))
+
         assert set(name2coef.keys()).issubset(name2loss.keys())
         loss = torch.zeros((), device=tu.dev())
         for name in name2loss.keys():
@@ -215,10 +233,22 @@ def aux_train(*, model, segs, opt: torch.optim.Optimizer, mbsize, name2coef):
             logger.logkv_mean("unscaled/" + name, unscaled_loss)
             logger.logkv_mean("scaled/" + name, scaled_loss)
             loss += scaled_loss
+        end = perf_counter()
+        total_loss_time += end - start
+
+        start = perf_counter()
         opt.zero_grad()
         loss.backward()
+        end = perf_counter()
         tu.sync_grads(model.parameters())
         opt.step()
+        total_grad_time += end - start
+
+        batches += 1
+
+    logger.log(
+        f"{batches} batches of aux training complete with:\n{total_move_time} seconds moving inputs\n{total_pred_time} seconds making predictions\n{total_loss_time} seconds computing losses\n{total_grad_time} backpropogating"
+    )
 
 
 def compute_presleep_outputs(*, model, segs, mbsize, pdkey="oldpd", vpredkey="oldvpred"):
@@ -257,10 +287,14 @@ def learn(
     aux_state = th.optim.Adam(model.parameters(), lr=aux_lr)
     name2coef = name2coef or {}
 
-    while True:
+    env_steps = 0
+    epoch = 0
+    while env_steps < interacts_total:
         store_segs = n_pi != 0 and n_aux_epochs != 0
 
+        logger.log(f"Starting PPO training at {arrow.utcnow()}")
         # Policy phase
+        start = perf_counter()
         ppo_state = ppo.learn(
             venv=venv,
             model=model,
@@ -273,16 +307,24 @@ def learn(
             comm=comm,
             **ppo_hps,
         )
+        end = perf_counter()
+        logger.log(f"Finished PPO training at {arrow.utcnow()}, {end - start} seconds elapsed")
 
-        if ppo_state["curr_interact_count"] >= interacts_total:
-            break
+        env_steps = cast(int, ppo_state["curr_interact_count"])
 
         if n_aux_epochs > 0:
             segs = ppo_state["seg_buf"]
+            logger.log(f"Computing presleep auxiliary outputs at {arrow.utcnow()}")
+            start = perf_counter()
             compute_presleep_outputs(model=model, segs=segs, mbsize=aux_mbsize)
+            end = perf_counter()
+            logger.log(f"presleep outputs done at {arrow.utcnow()}, {end - start} seconds elapsed")
+
+            logger.log(f"Starting auxiliary training at {arrow.utcnow()}")
+            start = perf_counter()
             # Auxiliary phase
             for i in range(n_aux_epochs):
-                logger.log(f"Aux epoch {i}")
+                logger.log(f"Aux epoch {i} starting at {arrow.utcnow()}")
                 aux_train(
                     model=model,
                     segs=segs,
@@ -291,4 +333,8 @@ def learn(
                     name2coef=name2coef,
                 )
                 logger.dumpkvs()
+            end = perf_counter()
+            logger.log(
+                f"Auxiliary training done at {arrow.utcnow()}, {end - start} total seconds elapsed, {(end - start) / n_aux_epochs} seconds per epoch."
+            )
             segs.clear()

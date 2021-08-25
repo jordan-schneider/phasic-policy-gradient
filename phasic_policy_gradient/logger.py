@@ -64,13 +64,13 @@ class SeqWriter(ABC):
 
 class HumanOutputFormat(KVWriter, SeqWriter):
     def __init__(self, filename_or_file):
-        if isinstance(filename_or_file, str):
+        if isinstance(filename_or_file, str) or isinstance(filename_or_file, Path):
             self.file = open(filename_or_file, "wt")
             self.own_file = True
         else:
-            assert hasattr(filename_or_file, "read"), (
-                "expected file or str, got %s" % filename_or_file
-            )
+            assert hasattr(
+                filename_or_file, "read"
+            ), f"expected file or str, got {filename_or_file}"
             self.file = filename_or_file
             self.own_file = False
 
@@ -256,8 +256,10 @@ class TensorBoardOutputFormat(KVWriter):
     def __init__(self, outdir: Path):
         if importlib.util.find_spec("tensorflow") is not None:
             self.formatter = TensorBoardOutputFormat.TfTensorboardOutputFormatter(outdir=outdir)
-        elif importlib.util.find_spec("pytorch") is not None:
+        elif importlib.util.find_spec("torch") is not None:
             self.formatter = TensorBoardOutputFormat.TorchTensorboardOutputFormatter(outdir=outdir)
+        else:
+            raise ImportError("One of tensorflow or pytorch must be installed to use tensorboard")
 
     def writekvs(self, kvs) -> None:
         self.formatter.writekvs(kvs)
@@ -272,15 +274,15 @@ def make_output_format(format, ev_dir: Path, log_suffix="", append: bool = False
     if format == "stdout":
         return HumanOutputFormat(sys.stdout)
     elif format == "log":
-        return HumanOutputFormat(ev_dir / "log%s.txt" % log_suffix)
+        return HumanOutputFormat(ev_dir / f"log{log_suffix}.txt")
     elif format == "json":
-        return JSONOutputFormat(ev_dir / "progress%s.json" % log_suffix)
+        return JSONOutputFormat(ev_dir / f"progress{log_suffix}.json")
     elif format == "csv":
-        return CSVOutputFormat(ev_dir / "progress%s.csv" % log_suffix, append)
+        return CSVOutputFormat(ev_dir / f"progress{log_suffix}.csv", append)
     elif format == "tensorboard":
-        return TensorBoardOutputFormat(ev_dir / "tb%s" % log_suffix)
+        return TensorBoardOutputFormat(ev_dir / f"tb{log_suffix}")
     else:
-        raise ValueError("Unknown format specified: %s" % (format,))
+        raise ValueError(f"Unknown format specified: {format}")
 
 
 # ================================================================
@@ -558,8 +560,8 @@ def configure(
 
     output_formats = [make_output_format(f, Path(outdir), log_suffix, append) for f in format_strs]
 
-    Logger.CURRENT = Logger(outdir=outdir, output_formats=output_formats, comm=comm)
-    log("logger: logging to %s" % outdir)
+    Logger.CURRENT = Logger(outdir=Path(outdir), output_formats=output_formats, comm=comm)
+    log(f"logger: logging to {outdir}")
 
 
 def is_configured():
@@ -650,7 +652,7 @@ def read_tb(path):
         fnames = [path]
     else:
         raise NotImplementedError(
-            "Expected tensorboard file or directory containing them. Got %s" % path
+            f"Expected tensorboard file or directory containing them. Got {path}"
         )
     tag2pairs = defaultdict(list)
     maxstep = 0

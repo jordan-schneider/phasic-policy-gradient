@@ -2,20 +2,23 @@
 Mostly copied from ppo.py but with some extra options added that are relevant to phasic
 """
 
+import math
+from time import perf_counter
+
 import numpy as np
 import torch as th
-from mpi4py import MPI
-from .tree_util import tree_map
+from mpi4py import MPI  # type: ignore
+
+from . import logger
 from . import torch_util as tu
 from .log_save_helper import LogSaveHelper
 from .minibatch_optimize import minibatch_optimize
-from .roller import Roller
 from .reward_normalizer import RewardNormalizer
-
-import math
-from . import logger
+from .roller import Roller
+from .tree_util import tree_map
 
 INPUT_KEYS = {"ob", "ac", "first", "logp", "vtarg", "adv", "state_in"}
+
 
 def compute_gae(
     *,
@@ -23,7 +26,7 @@ def compute_gae(
     reward: "(th.Tensor[1, float]) rewards",
     first: "(th.Tensor[1, bool]) mark beginning of episodes",
     γ: "(float)",
-    λ: "(float)"
+    λ: "(float)",
 ):
     orig_device = vpred.device
     assert orig_device == reward.device == first.device
@@ -43,13 +46,13 @@ def compute_gae(
     vtarg = vpred[:, :-1] + adv
     return adv.to(device=orig_device), vtarg.to(device=orig_device)
 
+
 def log_vf_stats(comm, **kwargs):
-    logger.logkv(
-        "VFStats/EV", tu.explained_variance(kwargs["vpred"], kwargs["vtarg"], comm)
-    )
+    logger.logkv("VFStats/EV", tu.explained_variance(kwargs["vpred"], kwargs["vtarg"], comm))
     for key in ["vpred", "vtarg", "adv"]:
         logger.logkv_mean(f"VFStats/{key.capitalize()}Mean", kwargs[key].mean())
         logger.logkv_mean(f"VFStats/{key.capitalize()}Std", kwargs[key].std())
+
 
 def compute_advantage(model, seg, γ, λ, comm=None):
     comm = comm or MPI.COMM_WORLD
@@ -68,6 +71,7 @@ def compute_advantage(model, seg, γ, λ, comm=None):
     seg["vtarg"] = vtarg
     adv_mean, adv_var = tu.mpi_moments(comm, adv)
     seg["adv"] = (adv - adv_mean) / (math.sqrt(adv_var) + 1e-8)
+
 
 def compute_losses(
     model,
@@ -112,6 +116,7 @@ def compute_losses(
 
     return losses, diags
 
+
 def learn(
     *,
     venv: "(VecEnv) vectorized environment",
@@ -142,16 +147,13 @@ def learn(
         comm = MPI.COMM_WORLD
 
     learn_state = learn_state or {}
-    ic_per_step = venv.num * comm.size * nstep
+    ic_per_step = int(venv.num * comm.size * nstep)
 
     opt_keys = (
         ["pi", "vf"] if (n_epoch_pi != n_epoch_vf) else ["pi"]
     )  # use separate optimizers when n_epoch_pi != n_epoch_vf
     params = list(model.parameters())
-    opts = learn_state.get("opts") or {
-        k: th.optim.Adam(params, lr=lr)
-        for k in opt_keys
-    }
+    opts = learn_state.get("opts") or {k: th.optim.Adam(params, lr=lr) for k in opt_keys}
 
     tu.sync_params(params)
 
@@ -205,20 +207,37 @@ def learn(
 
     callback_exit = False  # Does callback say to exit loop?
 
-    curr_interact_count = learn_state.get("curr_interact_count") or 0
+    curr_interact_count = int(learn_state.get("curr_interact_count", 0))
     curr_iteration = 0
     seg_buf = learn_state.get("seg_buf") or []
 
+    total_rollout_time = 0.0
+    total_stats_time = 0.0
+    total_adv_time = 0.0
+    total_grad_time = 0.0
+    batches = 0
     while curr_interact_count < interacts_total and not callback_exit:
+        start = perf_counter()
         seg = roller.multi_step(nstep)
+        end = perf_counter()
+        total_rollout_time += end - start
+
+        start = perf_counter()
         lsh.gather_roller_stats(roller)
+        end = perf_counter()
+        total_stats_time += end - start
+
+        start = perf_counter()
         if rnorm:
             seg["reward"] = reward_normalizer(seg["reward"], seg["first"])
         compute_advantage(model, seg, γ, λ, comm=comm)
+        end = perf_counter()
+        total_adv_time += end - start
 
         if store_segs:
             seg_buf.append(tree_map(lambda x: x.cpu(), seg))
 
+        start = perf_counter()
         with logger.profile_kv("optimization"):
             # when n_epoch_pi != n_epoch_vf, we perform separate policy and vf epochs with separate optimizers
             if n_epoch_pi != n_epoch_vf:
@@ -245,6 +264,8 @@ def learn(
             )
             for (k, v) in epoch_stats[-1].items():
                 logger.logkv("Opt/" + k, v)
+        end = perf_counter()
+        total_grad_time += end - start
 
         lsh()
 
@@ -253,6 +274,12 @@ def learn(
 
         for callback in callbacks:
             callback_exit = callback_exit or bool(callback(locals()))
+
+        batches += 1
+
+    logger.log(
+        f"{batches} batches of training complete with:\n{total_rollout_time} seconds for rollouts,\n{total_stats_time} seconds gathering stats for lsh,\n{total_adv_time} seconds computing advantages,\n{total_grad_time} seconds computing gradients"
+    )
 
     return dict(
         opts=opts,
