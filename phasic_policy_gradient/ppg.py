@@ -288,7 +288,6 @@ def learn(
     name2coef = name2coef or {}
 
     env_steps = 0
-    epoch = 0
     while env_steps < interacts_total:
         store_segs = n_pi != 0 and n_aux_epochs != 0
 
