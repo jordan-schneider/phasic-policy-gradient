@@ -4,6 +4,7 @@ Mostly copied from ppo.py but with some extra options added that are relevant to
 
 import math
 from time import perf_counter
+from typing import List, Optional
 
 import numpy as np
 import torch as th
@@ -211,33 +212,17 @@ def learn(
     curr_iteration = 0
     seg_buf = learn_state.get("seg_buf") or []
 
-    total_rollout_time = 0.0
-    total_stats_time = 0.0
-    total_adv_time = 0.0
-    total_grad_time = 0.0
-    batches = 0
     while curr_interact_count < interacts_total and not callback_exit:
-        start = perf_counter()
         seg = roller.multi_step(nstep)
-        end = perf_counter()
-        total_rollout_time += end - start
-
-        start = perf_counter()
         lsh.gather_roller_stats(roller)
-        end = perf_counter()
-        total_stats_time += end - start
 
-        start = perf_counter()
         if rnorm:
             seg["reward"] = reward_normalizer(seg["reward"], seg["first"])
         compute_advantage(model, seg, γ, λ, comm=comm)
-        end = perf_counter()
-        total_adv_time += end - start
 
         if store_segs:
             seg_buf.append(tree_map(lambda x: x.cpu(), seg))
 
-        start = perf_counter()
         with logger.profile_kv("optimization"):
             # when n_epoch_pi != n_epoch_vf, we perform separate policy and vf epochs with separate optimizers
             if n_epoch_pi != n_epoch_vf:
@@ -264,8 +249,6 @@ def learn(
             )
             for (k, v) in epoch_stats[-1].items():
                 logger.logkv("Opt/" + k, v)
-        end = perf_counter()
-        total_grad_time += end - start
 
         lsh()
 
@@ -274,12 +257,6 @@ def learn(
 
         for callback in callbacks:
             callback_exit = callback_exit or bool(callback(locals()))
-
-        batches += 1
-
-    logger.log(
-        f"{batches} batches of training complete with:\n{total_rollout_time} seconds for rollouts,\n{total_stats_time} seconds gathering stats for lsh,\n{total_adv_time} seconds computing advantages,\n{total_grad_time} seconds computing gradients"
-    )
 
     return dict(
         opts=opts,
