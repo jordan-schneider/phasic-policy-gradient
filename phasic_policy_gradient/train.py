@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
+import GPUtil
 import torch
 from mpi4py import MPI  # type: ignore
 from procgen.env import ProcgenGym3Env
@@ -59,7 +60,8 @@ def train_fn(
     """
     if comm is None:
         comm = MPI.COMM_WORLD
-    tu.setup_dist(comm=comm, start_port=port)
+
+    tu.setup_dist(comm=comm, start_port=port, gpu_offset=GPUtil.getFirstAvailable(order="load")[0])
     tu.register_distributions_for_tree_util()
 
     is_master = comm.Get_rank() == 0
