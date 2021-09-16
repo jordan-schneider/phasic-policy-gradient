@@ -171,7 +171,6 @@ class PhasicValueModel(PhasicModel):
 
         return pd, vfvec, aux, state_out
 
-    @torch.no_grad()
     def value(self, obs: torch.Tensor):
         return self.get_vhead(self.true_vf_key)(
             self.get_encoder(self.true_vf_key).stateless_forward(obs)

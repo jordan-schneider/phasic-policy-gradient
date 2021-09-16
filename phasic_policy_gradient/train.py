@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
-import GPUtil
+import GPUtil  # type: ignore
 import torch
 from mpi4py import MPI  # type: ignore
 from procgen.env import ProcgenGym3Env
