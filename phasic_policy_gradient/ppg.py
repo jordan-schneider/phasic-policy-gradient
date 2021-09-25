@@ -172,6 +172,7 @@ class PhasicValueModel(PhasicModel):
         return pd, vfvec, aux, state_out
 
     def value(self, obs: torch.Tensor):
+        obs = obs.to(self.device)
         return self.get_vhead(self.true_vf_key)(
             self.get_encoder(self.true_vf_key).stateless_forward(obs)
         )
