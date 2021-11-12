@@ -34,6 +34,10 @@ class PpoModel(th.nn.Module):
 
     @tu.no_grad
     def act(self, ob, first, state_in):
+        ob = ob.to(self.device)
+        first = first.to(self.device)
+        for k, v in state_in.items():
+            state_in[k] = v.to(self.device)
         pd, vpred, _, state_out = self(
             ob=tree_map(lambda x: x[:, None], ob),
             first=first[:, None],
@@ -178,7 +182,9 @@ class PhasicValueModel(PhasicModel):
         )
 
     def initial_state(self, batchsize: int) -> Dict[str, torch.Tensor]:
-        return {k: self.get_encoder(k).initial_state(batchsize) for k in self.enc_keys}
+        return {
+            k: self.get_encoder(k).initial_state(batchsize).to(self.device) for k in self.enc_keys
+        }
 
     def aux_keys(self) -> List[str]:
         return ["vtarg"]
