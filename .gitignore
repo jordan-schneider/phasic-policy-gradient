@@ -30,4 +30,4 @@ MANIFEST
 *.manifest
 *.spec
 
-.mypy_cache/**
+.mypy_cache/
