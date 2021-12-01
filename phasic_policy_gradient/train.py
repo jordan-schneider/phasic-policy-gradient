@@ -1,6 +1,6 @@
 import argparse
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import GPUtil  # type: ignore
 import torch
@@ -13,11 +13,12 @@ from .envs import get_venv
 from .impala_cnn import ImpalaEncoder
 
 
-def make_model(env: ProcgenGym3Env, arch: ppg.Architecture) -> ppg.PhasicValueModel:
+def make_model(env: ProcgenGym3Env, arch: ppg.Architecture, activation: Literal["relu","leaky","elu"]) -> ppg.PhasicValueModel:
     enc_fn = lambda obtype: ImpalaEncoder(
         obtype.shape,
         outsize=256,
         chans=(16, 32, 32),
+        activation=activation
     )
     model = ppg.PhasicValueModel(env.ob_space, env.ac_space, enc_fn, arch=arch)
     return model
@@ -31,6 +32,7 @@ def train_fn(
     model_path: Optional[Path] = None,
     start_time: int = 0,
     arch: ppg.Architecture = "dual",
+    activation: Literal["relu","leaky","elu"] = "relu",
     interacts_total=100_000_000,
     num_envs=64,
     n_epoch_pi=1,
@@ -78,7 +80,7 @@ def train_fn(
     if model_path is not None:
         model = torch.load(model_path, tu.DEFAULT_DEVICE)
     else:
-        model = make_model(venv, arch)
+        model = make_model(venv, arch, activation=activation)
         model.to(tu.DEFAULT_DEVICE)
 
     logger.log(tu.format_model(model))
