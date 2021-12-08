@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from typing import Literal
 
 import torch as th
 from gym3.types import Real, TensorType
@@ -126,7 +127,17 @@ class CnnDownStack(nn.Module):
 class ImpalaCNN(nn.Module):
     name = "ImpalaCNN"  # put it here to preserve pickle compat
 
-    def __init__(self, inshape, chans, outsize, scale_ob, nblock, final_relu=True, **kwargs):
+    def __init__(
+        self,
+        inshape,
+        chans,
+        outsize,
+        scale_ob,
+        nblock,
+        final_activation=True,
+        activation: Literal["relu", "leaky", "elu"] = "relu",
+        **kwargs,
+    ):
         super().__init__()
         self.scale_ob = scale_ob
         h, w, c = inshape
@@ -134,12 +145,26 @@ class ImpalaCNN(nn.Module):
         s = 1 / math.sqrt(len(chans))  # per stack scale
         self.stacks = nn.ModuleList()
         for outchan in chans:
-            stack = CnnDownStack(curshape[0], nblock=nblock, outchan=outchan, scale=s, **kwargs)
+            stack = CnnDownStack(
+                curshape[0], nblock=nblock, outchan=outchan, scale=s, **kwargs
+            )
             self.stacks.append(stack)
             curshape = stack.output_shape(curshape)
         self.dense = tu.NormedLinear(tu.intprod(curshape), outsize, scale=1.4)
         self.outsize = outsize
-        self.final_relu = final_relu
+        self.set_activation(activation)
+
+        self.final_activation = final_activation
+
+    def set_activation(self, activation: Literal["relu", "leaky", "elu"]) -> None:
+        if activation == "relu":
+            self.activation = F.relu
+        elif activation == "leaky":
+            self.activation = F.leaky_relu
+        elif activation == "elu":
+            self.activation == F.elu
+        else:
+            raise ValueError(f"Invalid activation fn={activation}")
 
     def forward(self, x):
         x = x.to(dtype=th.float32) / self.scale_ob
@@ -150,16 +175,22 @@ class ImpalaCNN(nn.Module):
         x = tu.sequential(self.stacks, x, diag_name=self.name)
         x = x.reshape(b, t, *x.shape[1:])
         x = tu.flatten_image(x)
-        x = th.relu(x)
+        x = self.activation(x)
         x = self.dense(x)
-        if self.final_relu:
-            x = th.relu(x)
+        if self.final_activation:
+            x = self.activation(x)
         return x
 
 
 class ImpalaEncoder(Encoder):
     def __init__(
-        self, inshape, outsize=256, chans=(16, 32, 32), scale_ob=255.0, nblock=2, **kwargs
+        self,
+        inshape,
+        outsize=256,
+        chans=(16, 32, 32),
+        scale_ob=255.0,
+        nblock=2,
+        **kwargs,
     ):
         codetype = TensorType(eltype=REAL, shape=(outsize,))
         obtype = TensorType(eltype=REAL, shape=inshape)
@@ -170,7 +201,7 @@ class ImpalaEncoder(Encoder):
             scale_ob=scale_ob,
             nblock=nblock,
             outsize=outsize,
-            **kwargs
+            **kwargs,
         )
 
     def forward(self, x, first, state_in):

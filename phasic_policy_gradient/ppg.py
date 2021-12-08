@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 import itertools
 import operator
-from time import perf_counter
 from typing import Callable, Dict, List, Literal, Tuple, cast
 
 import arrow
@@ -10,7 +11,7 @@ from gym3.types import ValType  # type: ignore
 from mpi4py import MPI  # type: ignore
 from torch import distributions as td
 
-from phasic_policy_gradient.impala_cnn import Encoder, ImpalaEncoder
+from phasic_policy_gradient.impala_cnn import ImpalaEncoder
 
 from . import logger, ppo
 from . import torch_util as tu
@@ -183,11 +184,21 @@ class PhasicValueModel(PhasicModel):
 
     def initial_state(self, batchsize: int) -> Dict[str, torch.Tensor]:
         return {
-            k: self.get_encoder(k).initial_state(batchsize).to(self.device) for k in self.enc_keys
+            k: self.get_encoder(k).initial_state(batchsize).to(self.device)
+            for k in self.enc_keys
         }
 
     def aux_keys(self) -> List[str]:
         return ["vtarg"]
+
+    def to(self: PhasicValueModel, *args, **kwargs) -> PhasicValueModel:
+        super().to(*args, **kwargs)
+        if "device" in kwargs.keys():
+            device = kwargs.get("device")
+        elif isinstance(args[0], torch.device) or isinstance(args[0], int):
+            device = torch.device(args[0])
+        self.device = device
+        return self
 
 
 def make_minibatches(segs, mbsize):
@@ -200,7 +211,9 @@ def make_minibatches(segs, mbsize):
     envs_segs = th.tensor(list(itertools.product(range(nenv), range(nseg))))
     for perminds in th.randperm(len(envs_segs)).split(mbsize):
         esinds = envs_segs[perminds]
-        yield tu.tree_stack([tu.tree_slice(segs[segind], envind) for (envind, segind) in esinds])
+        yield tu.tree_stack(
+            [tu.tree_slice(segs[segind], envind) for (envind, segind) in esinds]
+        )
 
 
 def aux_train(*, model, segs, opt: torch.optim.Optimizer, mbsize, name2coef) -> None:
@@ -234,7 +247,9 @@ def aux_train(*, model, segs, opt: torch.optim.Optimizer, mbsize, name2coef) -> 
         opt.step()
 
 
-def compute_presleep_outputs(*, model, segs, mbsize, pdkey="oldpd", vpredkey="oldvpred"):
+def compute_presleep_outputs(
+    *, model, segs, mbsize, pdkey="oldpd", vpredkey="oldvpred"
+):
     def forward(ob, first, state_in):
         pd, vpred, _aux, _state_out = model.forward(ob.to(tu.dev()), first, state_in)
         return pd, vpred
