@@ -5,7 +5,7 @@ from typing import Literal, Optional
 
 import numpy as np
 import torch as th
-from mpi4py import MPI
+from mpi4py import MPI  # type: ignore
 from torch import nn
 
 from . import logger
@@ -121,7 +121,9 @@ class LogSaveHelper:
         logger.logkv("IPS_total", Δic / Δtime)
         logger.logkv("del_time", Δtime)
         logger.logkv("Iter", self.log_idx)
-        logger.logkv("CpuMaxMemory", resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1000)
+        logger.logkv(
+            "CpuMaxMemory", resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1000
+        )
         if th.cuda.is_available():
             logger.logkv("GpuMaxMemory", th.cuda.max_memory_allocated())
             th.cuda.reset_max_memory_allocated()
@@ -146,7 +148,7 @@ class LogSaveHelper:
         basename += f"{suffix}.jd"
         fname = os.path.join(self.save_dir, basename)
         logger.log("Saving to ", fname, f"IC={self.total_interact_count}")
-        th.save(self.model, fname, pickle_protocol=-1)
+        th.save(self.model.state_dict(), fname, pickle_protocol=-1)
         self.save_idx += 1
 
     def _nanmean(self, xs):

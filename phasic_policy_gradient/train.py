@@ -61,7 +61,9 @@ def train_fn(
     if comm is None:
         comm = MPI.COMM_WORLD
 
-    tu.setup_dist(comm=comm, start_port=port, gpu_offset=GPUtil.getFirstAvailable(order="load")[0])
+    tu.setup_dist(
+        comm=comm, start_port=port, gpu_offset=GPUtil.getFirstAvailable(order="load")[0]
+    )
     tu.register_distributions_for_tree_util()
 
     is_master = comm.Get_rank() == 0
@@ -69,17 +71,21 @@ def train_fn(
     if log_dir is not None:
         format_strs = ["csv", "stdout", "log", "tensorboard"] if is_master else []
         logger.configure(
-            comm=comm, outdir=log_dir, format_strs=format_strs, append=model_path is not None
+            comm=comm,
+            outdir=log_dir,
+            format_strs=format_strs,
+            append=model_path is not None,
         )
 
     if venv is None:
-        venv = get_venv(num_envs=num_envs, env_name=env_name, distribution_mode=distribution_mode)
+        venv = get_venv(
+            num_envs=num_envs, env_name=env_name, distribution_mode=distribution_mode
+        )
 
+    model = make_model(venv, arch)
+    model.to(tu.DEFAULT_DEVICE)
     if model_path is not None:
-        model = torch.load(model_path, tu.DEFAULT_DEVICE)
-    else:
-        model = make_model(venv, arch)
-        model.to(tu.DEFAULT_DEVICE)
+        model.load_state_dict(torch.load(model_path, tu.DEFAULT_DEVICE))
 
     logger.log(tu.format_model(model))
     tu.sync_params(model.parameters())
@@ -124,7 +130,9 @@ def main():
     parser.add_argument("--n_pi", type=int, default=32)
     parser.add_argument("--clip_param", type=float, default=0.2)
     parser.add_argument("--kl_penalty", type=float, default=0.0)
-    parser.add_argument("--arch", type=str, default="dual")  # 'shared', 'detach', or 'dual'
+    parser.add_argument(
+        "--arch", type=str, default="dual"
+    )  # 'shared', 'detach', or 'dual'
 
     args = parser.parse_args()
 
