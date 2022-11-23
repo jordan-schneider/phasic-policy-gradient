@@ -84,8 +84,8 @@ def train_fn(
 
     model = make_model(venv, arch)
     model.to(tu.DEFAULT_DEVICE)
-    if model_path is not None:
-        model.load_state_dict(torch.load(model_path, tu.DEFAULT_DEVICE))
+    if model_path is not None and is_master:
+        model.load_state_dict(torch.load(model_path, map_location=tu.DEFAULT_DEVICE))
 
     logger.log(tu.format_model(model))
     tu.sync_params(model.parameters())
